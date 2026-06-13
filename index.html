@@ -1,0 +1,1147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Ray-Marching Shader Playground</title>
+<style>
+  /* ============================================================
+     UI – tmavý glassmorphism, minimalistický
+     ============================================================ */
+  :root{
+    --glass: rgba(13, 16, 24, 0.58);
+    --glass-border: rgba(255,255,255,0.09);
+    --fg: #dfe6f0;
+    --fg-dim: #8d97a8;
+    --accent: #5eb8ff;
+  }
+  *{ box-sizing: border-box; margin: 0; padding: 0; }
+  html, body{ width:100%; height:100%; overflow:hidden; background:#05060a; }
+  body{ font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--fg); }
+  #glcanvas{ position:fixed; inset:0; width:100%; height:100%; display:block; cursor:crosshair; }
+
+  /* stredový krížik */
+  #crosshair{
+    position:fixed; left:50%; top:50%; width:6px; height:6px;
+    margin:-3px 0 0 -3px; border-radius:50%;
+    background:#fff; mix-blend-mode:difference; pointer-events:none; opacity:.85;
+  }
+
+  /* HUD vľavo dole – pozícia + fps */
+  #hud{
+    position:fixed; left:14px; bottom:12px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size:12px; line-height:1.55; color:var(--fg-dim);
+    background:var(--glass); border:1px solid var(--glass-border);
+    border-radius:10px; padding:8px 12px;
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    pointer-events:none; white-space:pre;
+  }
+  #hud b{ color:var(--fg); font-weight:600; }
+
+  /* hlavný panel */
+  #panel{
+    position:fixed; right:14px; top:14px; width:268px;
+    background:var(--glass); border:1px solid var(--glass-border);
+    border-radius:14px; backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+    box-shadow: 0 10px 40px rgba(0,0,0,.45);
+    user-select:none; overflow:hidden;
+  }
+  #panelHead{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:11px 14px; cursor:pointer; font-size:13px; font-weight:600;
+    letter-spacing:.4px;
+  }
+  #panelHead small{ color:var(--fg-dim); font-weight:400; }
+  #panelBody{ padding:2px 14px 14px; }
+  #panel.collapsed #panelBody{ display:none; }
+
+  .row{ margin:9px 0; }
+  .row label{
+    display:flex; justify-content:space-between; font-size:11.5px;
+    color:var(--fg-dim); margin-bottom:4px; letter-spacing:.3px;
+  }
+  .row label span.val{ color:var(--fg); font-family:ui-monospace,monospace; }
+
+  select{
+    width:100%; padding:7px 9px; border-radius:8px;
+    background:rgba(255,255,255,0.06); color:var(--fg);
+    border:1px solid var(--glass-border); font-size:13px; outline:none;
+  }
+  select option{ background:#11141c; }
+
+  .palettes{ display:flex; gap:6px; }
+  .palettes button{
+    flex:1; height:26px; border-radius:7px; border:1px solid var(--glass-border);
+    cursor:pointer; opacity:.55; transition:opacity .15s, transform .1s;
+  }
+  .palettes button.active{ opacity:1; outline:2px solid var(--accent); }
+  .palettes button:hover{ transform:translateY(-1px); }
+
+  input[type=range]{
+    width:100%; height:18px; -webkit-appearance:none; appearance:none; background:transparent;
+  }
+  input[type=range]::-webkit-slider-runnable-track{
+    height:4px; border-radius:2px; background:rgba(255,255,255,0.14);
+  }
+  input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none; width:13px; height:13px; border-radius:50%;
+    background:var(--accent); margin-top:-4.5px; cursor:pointer;
+    box-shadow:0 0 8px rgba(94,184,255,.6);
+  }
+  input[type=range]::-moz-range-track{
+    height:4px; border-radius:2px; background:rgba(255,255,255,0.14);
+  }
+  input[type=range]::-moz-range-thumb{
+    width:13px; height:13px; border:none; border-radius:50%;
+    background:var(--accent); cursor:pointer;
+  }
+  .check{ display:flex; align-items:center; gap:8px; font-size:12px; color:var(--fg-dim); cursor:pointer; }
+  .check input{ accent-color: var(--accent); }
+
+  #shotBtn{
+    width:100%; margin-top:10px; padding:8px; border-radius:9px;
+    background:rgba(94,184,255,0.14); color:var(--accent);
+    border:1px solid rgba(94,184,255,0.35); font-size:12.5px; font-weight:600;
+    cursor:pointer; letter-spacing:.4px; transition:background .15s;
+  }
+  #shotBtn:hover{ background:rgba(94,184,255,0.26); }
+  hr.sep{ border:none; border-top:1px solid var(--glass-border); margin:11px 0; }
+
+  /* nápoveda ovládania – zmizne po 5 s */
+  #hint{
+    position:fixed; left:50%; bottom:64px; transform:translateX(-50%);
+    background:var(--glass); border:1px solid var(--glass-border);
+    border-radius:12px; padding:10px 18px; font-size:12.5px;
+    color:var(--fg-dim); text-align:center; line-height:1.7;
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    pointer-events:none; transition: opacity 1.2s ease; white-space:nowrap;
+  }
+  #hint b{ color:var(--fg); }
+  #hint.fade{ opacity:0; }
+  .uiHidden{ display:none !important; }
+
+  #nogl{
+    position:fixed; inset:0; display:none; place-items:center; text-align:center;
+    font-size:15px; color:var(--fg-dim); padding:30px;
+  }
+</style>
+</head>
+<body>
+<canvas id="glcanvas"></canvas>
+<div id="crosshair"></div>
+<div id="hud"></div>
+
+<div id="panel">
+  <div id="panelHead"><span>RAYMARCH&nbsp;PLAYGROUND</span><small>H&nbsp;=&nbsp;hide&nbsp;·&nbsp;▾</small></div>
+  <div id="panelBody">
+    <div class="row">
+      <label>Scene</label>
+      <select id="sceneSel">
+        <option value="0">Mandelbulb</option>
+        <option value="1">Menger Sponge</option>
+        <option value="2">Infinite City</option>
+        <option value="3">Mirror Room</option>
+        <option value="4">Gyroid World</option>
+      </select>
+    </div>
+    <div class="row">
+      <label>Palette</label>
+      <div class="palettes">
+        <button data-p="0"></button><button data-p="1"></button><button data-p="2"></button>
+      </div>
+    </div>
+    <div class="row" id="specialRow">
+      <label><span id="specialName">Power</span><span class="val" id="specialVal"></span></label>
+      <input type="range" id="special">
+    </div>
+    <div class="row" id="animPowerRow">
+      <label class="check"><input type="checkbox" id="animPower"> Animate power (morph 2 → 12)</label>
+    </div>
+    <hr class="sep">
+    <div class="row">
+      <label>Resolution scale <span class="val" id="resVal">0.75x</span></label>
+      <input type="range" id="resScale" min="0.25" max="1" step="0.05" value="0.75">
+    </div>
+    <div class="row">
+      <label class="check"><input type="checkbox" id="adaptive" checked> Adaptive quality (45 / 58 fps)</label>
+    </div>
+    <hr class="sep">
+    <div class="row">
+      <label>Fog density <span class="val" id="fogVal"></span></label>
+      <input type="range" id="fog" min="0" max="1" step="0.01" value="0.45">
+    </div>
+    <div class="row">
+      <label>Shadow softness <span class="val" id="shadowVal"></span></label>
+      <input type="range" id="shadow" min="0" max="1" step="0.01" value="0.5">
+    </div>
+    <div class="row">
+      <label>AO strength <span class="val" id="aoVal"></span></label>
+      <input type="range" id="ao" min="0" max="1" step="0.01" value="0.7">
+    </div>
+    <div class="row">
+      <label>Animation speed <span class="val" id="animVal"></span></label>
+      <input type="range" id="anim" min="0" max="3" step="0.05" value="1">
+    </div>
+    <div class="row">
+      <label>FOV <span class="val" id="fovVal"></span></label>
+      <input type="range" id="fov" min="40" max="110" step="1" value="70">
+    </div>
+    <button id="shotBtn">📷 Screenshot (full res PNG)</button>
+  </div>
+</div>
+
+<div id="hint">
+  <b>Click</b> to capture mouse · <b>WASD</b> move · <b>Q/E</b> or <b>Space/Shift</b> up/down<br>
+  <b>Scroll</b> speed · <b>H</b> hide UI · Touch: 1 finger look, 2 fingers move
+</div>
+
+<div id="nogl">WebGL2 is not available in this browser :(</div>
+
+<script>
+"use strict";
+
+/* ════════════════════════════════════════════════════════════════════
+   1. ZDROJ SHADEROV
+      – jeden fragment shader pre všetkých 5 scén, prepínané uniformom
+        uScene. Vetvenie je uniformne koherentné (celá obrazovka ide tou
+        istou vetvou), takže nevzniká divergencia warpov a ušetríme si
+        5× kompiláciu aj prepínanie programov.
+   ════════════════════════════════════════════════════════════════════ */
+
+const VERT_SRC = `#version 300 es
+out vec2 vUV;
+void main(){
+  // fullscreen trojuholník bez vertex bufferov (gl_VertexID trik)
+  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+  vUV = p;
+  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
+const FRAG_SRC = `#version 300 es
+precision highp float;
+precision highp int;
+
+out vec4 outColor;
+
+uniform vec2  uRes;        // rozlíšenie render targetu
+uniform float uTime;       // animačný čas (už škálovaný rýchlosťou animácie)
+uniform int   uScene;      // 0..4 – aktívna scéna
+uniform int   uPalette;    // 0..2 – preset palety pre danú scénu
+uniform float uFog;        // 0..1 – hustota hmly
+uniform float uShadow;     // 0..1 – mäkkosť tieňov
+uniform float uAO;         // 0..1 – sila ambient occlusion
+uniform float uFov;        // vertikálny FOV v radiánoch
+uniform float uSpecial;    // špeciálny parameter scény (power/iterácie/…)
+uniform int   uAnimPower;  // 1 = animovaný power mandelbulbu
+uniform vec3  uCamPos;
+uniform float uYaw;
+uniform float uPitch;
+
+#define MAX_STEPS 256
+#define MAX_DIST  300.0
+#define PI 3.14159265
+
+/* ---------- pomocné funkcie ---------- */
+
+mat2 rot2(float a){ float s = sin(a), c = cos(a); return mat2(c, -s, s, c); }
+
+float hash11(float n){ return fract(sin(n) * 43758.5453123); }
+float hash21(vec2 p){
+  p = fract(p * vec2(123.34, 456.21));
+  p += dot(p, p + 45.32);
+  return fract(p.x * p.y);
+}
+float hash31(vec3 p){
+  p = fract(p * 0.1031);
+  p += dot(p, p.zyx + 31.32);
+  return fract((p.x + p.y) * p.z);
+}
+
+// SDF kvádra – vzdialenosť od povrchu kvádra s polrozmermi b
+float sdBox(vec3 p, vec3 b){
+  vec3 q = abs(p) - b;
+  return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0);
+}
+// SDF gule
+float sdSphere(vec3 p, float r){ return length(p) - r; }
+
+/* ---------- IQ kosínusové palety ----------
+   farba = a + b * cos(2π (c·t + d)); 3 presety pre každú z 5 scén.   */
+const vec3 PA[15] = vec3[15](
+  vec3(0.50,0.50,0.50), vec3(0.55,0.42,0.30), vec3(0.40,0.50,0.62),
+  vec3(0.52,0.45,0.38), vec3(0.50,0.50,0.50), vec3(0.38,0.50,0.44),
+  vec3(0.55,0.45,0.60), vec3(0.60,0.45,0.30), vec3(0.45,0.55,0.65),
+  vec3(0.60,0.42,0.50), vec3(0.42,0.55,0.60), vec3(0.55,0.50,0.40),
+  vec3(0.45,0.55,0.55), vec3(0.50,0.42,0.58), vec3(0.55,0.42,0.42)
+);
+const vec3 PB[15] = vec3[15](
+  vec3(0.50,0.50,0.50), vec3(0.50,0.42,0.30), vec3(0.32,0.40,0.50),
+  vec3(0.42,0.38,0.30), vec3(0.50,0.50,0.50), vec3(0.35,0.45,0.38),
+  vec3(0.45,0.40,0.50), vec3(0.45,0.40,0.25), vec3(0.40,0.45,0.50),
+  vec3(0.45,0.38,0.42), vec3(0.38,0.45,0.48), vec3(0.42,0.42,0.35),
+  vec3(0.40,0.45,0.45), vec3(0.42,0.38,0.48), vec3(0.45,0.38,0.38)
+);
+const vec3 PC[15] = vec3[15](
+  vec3(1.00,1.00,1.00), vec3(1.00,1.00,1.00), vec3(1.00,1.00,1.00),
+  vec3(1.00,1.00,1.00), vec3(1.00,1.00,1.00), vec3(1.00,1.00,1.00),
+  vec3(2.00,1.00,1.00), vec3(1.00,1.00,1.00), vec3(1.00,1.00,0.50),
+  vec3(1.00,1.00,1.00), vec3(1.00,1.00,1.00), vec3(1.00,1.00,1.00),
+  vec3(1.00,1.00,1.00), vec3(1.00,1.00,1.00), vec3(1.00,1.00,1.00)
+);
+const vec3 PD[15] = vec3[15](
+  vec3(0.00,0.33,0.67), vec3(0.00,0.10,0.20), vec3(0.55,0.65,0.75),
+  vec3(0.00,0.12,0.25), vec3(0.30,0.20,0.20), vec3(0.10,0.35,0.20),
+  vec3(0.50,0.20,0.25), vec3(0.00,0.15,0.30), vec3(0.60,0.45,0.20),
+  vec3(0.85,0.40,0.30), vec3(0.50,0.30,0.20), vec3(0.00,0.25,0.50),
+  vec3(0.30,0.55,0.45), vec3(0.70,0.40,0.20), vec3(0.00,0.40,0.55)
+);
+
+vec3 palette(float t){
+  int i = uScene * 3 + uPalette;
+  return PA[i] + PB[i] * cos(6.28318 * (PC[i] * t + PD[i]));
+}
+
+/* globálny orbit-trap pre mandelbulb (naplní map(), číta shading) */
+vec4 gTrap = vec4(1e10);
+
+/* ════════════════════════════════════════════════════════════════
+   SCÉNA 0 – MANDELBULB
+   Klasický power-N mandelbulb. Odhad vzdialenosti cez deriváciu dr,
+   zároveň zbierame orbit-trap (min |z| po zložkách) pre farbenie.
+   ════════════════════════════════════════════════════════════════ */
+float sdMandelbulb(vec3 p, float power){
+  vec3 z = p;
+  float dr = 1.0, r = 0.0;
+  vec4 trap = vec4(abs(z), dot(z, z));
+  for(int i = 0; i < 10; i++){
+    r = length(z);
+    if(r > 2.0) break;
+    // prevod do sférických súradníc, umocnenie uhlov aj polomeru
+    float theta = acos(clamp(z.z / max(r, 1e-6), -1.0, 1.0)) * power;
+    float phi   = atan(z.y, z.x) * power;
+    dr = pow(r, power - 1.0) * power * dr + 1.0;
+    float zr = pow(r, power);
+    z = zr * vec3(sin(theta) * cos(phi), sin(theta) * sin(phi), cos(theta)) + p;
+    trap = min(trap, vec4(abs(z), dot(z, z)));
+  }
+  gTrap = trap;
+  return 0.5 * log(max(r, 1e-6)) * r / dr;
+}
+
+vec2 sceneMandelbulb(vec3 p){
+  // pomalá rotácia celého fraktálu
+  p.xz *= rot2(uTime * 0.10);
+  // voliteľné morfovanie powerov medzi 2 a 12
+  float power = (uAnimPower == 1) ? 7.0 + 5.0 * sin(uTime * 0.25) : uSpecial;
+  return vec2(sdMandelbulb(p, power), 1.0);
+}
+
+/* ════════════════════════════════════════════════════════════════
+   SCÉNA 1 – MENGER SPONGE
+   Iteratívne vyrezávanie krížov z kocky; fold-priestor sa pomaly
+   otáča. LOD: vzdialenejšie body používajú menej iterácií.
+   ════════════════════════════════════════════════════════════════ */
+float sdMenger(vec3 p, float iters){
+  // pomalá rotácia priestoru skladania
+  p.xy *= rot2(uTime * 0.05);
+  p.yz *= rot2(uTime * 0.035);
+  float d = sdBox(p, vec3(1.5));
+  float s = 1.0;
+  for(int m = 0; m < 6; m++){
+    if(float(m) >= iters) break;
+    vec3 a = mod(p * s / 1.5, 2.0) - 1.0;
+    s *= 3.0;
+    vec3 r = abs(1.0 - 3.0 * abs(a));
+    float da = max(r.x, r.y);
+    float db = max(r.y, r.z);
+    float dc = max(r.z, r.x);
+    float c = (min(da, min(db, dc)) - 1.0) / s * 1.5;
+    d = max(d, c);
+  }
+  return d;
+}
+
+vec2 sceneMenger(vec3 p){
+  // LOD podľa vzdialenosti od kamery – ďaleko netreba plný detail
+  float distC = length(p - uCamPos);
+  float lod = clamp(uSpecial - max(0.0, floor(log2(max(distC, 1.0) * 0.4))), 1.0, 6.0);
+  return vec2(sdMenger(p, lod), 2.0);
+}
+
+/* ════════════════════════════════════════════════════════════════
+   SCÉNA 2 – INFINITE CITY
+   Doménová repetícia veží; výška a pôdorys z hashu ID bunky.
+   Krok lúča je orezaný na hranici bunky, aby sme nepreskočili
+   suseda s vyššou vežou.
+   ════════════════════════════════════════════════════════════════ */
+#define CITY_CELL 7.0
+
+vec2 sceneCity(vec3 p){
+  vec2 id = floor(p.xz / CITY_CELL);
+  vec2 q  = mod(p.xz, CITY_CELL) - CITY_CELL * 0.5;  // lokálne súradnice bunky
+  float d = p.y;        // zem – rovina y = 0
+  float mat = 30.0;
+  float h = hash21(id);
+  if(h < uSpecial){     // hustota mesta = pravdepodobnosť veže v bunke
+    float hgt = 3.0 + 23.0 * hash21(id + 13.1) * hash21(id + 7.7);
+    vec2 fp = vec2(1.1 + 1.5 * hash21(id + 3.3), 1.1 + 1.5 * hash21(id + 9.2));
+    float tower = sdBox(vec3(q.x, p.y - hgt * 0.5, q.y), vec3(fp.x, hgt * 0.5, fp.y)) - 0.04;
+    if(tower < d){ d = tower; mat = 31.0; }
+  }
+  // orez kroku: nikdy neprekročíme hranicu bunky jedným skokom;
+  // vysoko nad mestom (p.y > 27) krokujeme voľne podľa výšky
+  float wall = CITY_CELL * 0.5 - max(abs(q.x), abs(q.y));
+  float clampD = max(max(wall, 0.3), p.y - 27.0);
+  return vec2(min(d, clampD), mat);
+}
+
+/* ════════════════════════════════════════════════════════════════
+   SCÉNA 3 – MIRROR ROOM
+   Invertovaný box ako miestnosť, levitujúca guľa, 4 stĺpy
+   a dva emisné svetelné panely. Odrazy rieši render slučka.
+   ════════════════════════════════════════════════════════════════ */
+#define ROOM_HALF vec3(7.0, 3.6, 7.0)
+
+vec2 sceneMirror(vec3 p){
+  float d = -sdBox(p, ROOM_HALF);   // sme VO vnútri boxu
+  float mat = 40.0;
+  // levitujúca guľa
+  float sph = sdSphere(p - vec3(0.0, -1.3 + 0.55 * sin(uTime * 0.8), 0.0), 1.25);
+  if(sph < d){ d = sph; mat = 41.0; }
+  // 4 stĺpy v rohoch (zrkadlové preklopenie do jedného kvadrantu)
+  vec3 q = vec3(abs(p.x) - 4.8, p.y, abs(p.z) - 4.8);
+  float pil = length(q.xz) - 0.45;
+  if(pil < d){ d = pil; mat = 42.0; }
+  // emisné panely na dvoch stenách
+  float panA = sdBox(p - vec3(0.0, 0.4, -6.92), vec3(2.6, 1.5, 0.10));
+  if(panA < d){ d = panA; mat = 43.0; }
+  float panB = sdBox(p - vec3(-6.92, 0.4, 0.0), vec3(0.10, 1.5, 2.6));
+  if(panB < d){ d = panB; mat = 44.0; }
+  return vec2(d, mat);
+}
+
+/* ════════════════════════════════════════════════════════════════
+   SCÉNA 4 – GYROID WORLD
+   TPMS gyroid ako jaskynný systém; druhá tenká gyroidná škrupina
+   tvorí žiariace žily (emisia sa počíta v shadingu).
+   ════════════════════════════════════════════════════════════════ */
+#define GYR_SCALE 0.9
+
+vec2 sceneGyroid(vec3 p){
+  vec3 q = p * GYR_SCALE;
+  float g = dot(sin(q), cos(q.zxy));
+  // |gradient| gyroidu je max ~√3·s, delenie ho robí konzervatívnym
+  float d = (abs(g) - uSpecial * 3.0) / (GYR_SCALE * 2.2);
+  return vec2(d, 50.0);
+}
+
+/* ---------- hlavná mapa scény ---------- */
+vec2 map(vec3 p){
+  if(uScene == 0) return sceneMandelbulb(p);
+  if(uScene == 1) return sceneMenger(p);
+  if(uScene == 2) return sceneCity(p);
+  if(uScene == 3) return sceneMirror(p);
+  return sceneGyroid(p);
+}
+
+/* ---------- ray marching ----------
+   Sphere tracing s relaxáciou kroku a epsilonom rastúcim so
+   vzdialenosťou (kužeľ pixelu).                                   */
+float gPix; // uhlová veľkosť pixelu, nastavuje main()
+
+vec2 march(vec3 ro, vec3 rd){
+  float t = 0.0;
+  float m = -1.0;
+  float relax = (uScene == 2) ? 0.85 : 0.92;  // mesto má hash-ovú geometriu
+  for(int i = 0; i < MAX_STEPS; i++){
+    vec2 h = map(ro + rd * t);
+    float eps = clamp(t * gPix, 0.00025, 0.08);
+    if(h.x < eps){ m = h.y; break; }
+    t += h.x * relax;
+    if(t > MAX_DIST) break;
+  }
+  if(t > MAX_DIST) m = -1.0;
+  return vec2(t, m);
+}
+
+/* ---------- normála technikou štvorstena (4 vzorky SDF) ---------- */
+vec3 calcNormal(vec3 p, float t){
+  float h = clamp(t * gPix * 0.7, 0.0002, 0.02);
+  vec2 e = vec2(1.0, -1.0) * 0.5773 * h;
+  return normalize(
+    e.xyy * map(p + e.xyy).x +
+    e.yyx * map(p + e.yyx).x +
+    e.yxy * map(p + e.yxy).x +
+    e.xxx * map(p + e.xxx).x);
+}
+
+/* ---------- mäkké tiene (penumbra z pomeru k·h/t) ---------- */
+float softShadow(vec3 ro, vec3 rd, float tmax){
+  float k = mix(32.0, 3.0, uShadow);   // mäkkosť: vyššie k = ostrejší tieň
+  float res = 1.0;
+  float t = 0.03;
+  for(int i = 0; i < 48; i++){
+    float h = map(ro + rd * t).x;
+    res = min(res, k * h / t);
+    t += clamp(h, 0.012, 0.6);
+    if(res < 0.004 || t > tmax) break;
+  }
+  return clamp(res, 0.0, 1.0);
+}
+
+/* ---------- ambient occlusion – 5 SDF vzoriek pozdĺž normály ---------- */
+float calcAO(vec3 p, vec3 n){
+  float scale = (uScene == 2) ? 3.0 : 1.0;   // mesto má väčšiu geometriu
+  float occ = 0.0, sca = 1.0;
+  for(int i = 0; i < 5; i++){
+    float h = (0.02 + 0.11 * float(i)) * scale;
+    float d = map(p + n * h).x;
+    occ += (h - d) * sca;
+    sca *= 0.72;
+  }
+  return clamp(1.0 - 1.6 * occ * uAO / scale, 0.0, 1.0);
+}
+
+/* ---------- hviezdy pre nočné oblohy ---------- */
+float stars(vec3 rd){
+  vec3 g = floor(rd * 220.0);
+  float h = hash31(g);
+  float tw = 0.75 + 0.25 * sin(uTime * 3.0 + h * 60.0);
+  return smoothstep(0.997, 1.0, h) * tw;
+}
+
+/* ---------- pozadie / obloha podľa scény ---------- */
+vec3 sky(vec3 rd){
+  float up = clamp(rd.y * 0.5 + 0.5, 0.0, 1.0);
+  if(uScene == 0){          // hlboký vesmír
+    vec3 c = mix(vec3(0.020, 0.018, 0.045), vec3(0.004, 0.005, 0.012), up);
+    return c + vec3(0.9, 0.95, 1.0) * stars(rd);
+  }
+  if(uScene == 1){          // úsvit
+    vec3 c = mix(vec3(0.35, 0.18, 0.10), vec3(0.04, 0.07, 0.16), pow(up, 0.6));
+    return c * 0.7;
+  }
+  if(uScene == 2){          // nočné mesto
+    vec3 c = mix(vec3(0.10, 0.05, 0.12), vec3(0.005, 0.008, 0.022), pow(up, 0.45));
+    return c + vec3(0.8, 0.9, 1.0) * stars(rd) * step(0.0, rd.y);
+  }
+  if(uScene == 3) return vec3(0.01, 0.011, 0.016);  // interiér
+  return mix(vec3(0.015, 0.045, 0.05), vec3(0.001, 0.004, 0.006), up); // gyroid šero
+}
+
+/* ---------- emisia okien mesta (počíta sa z world-pozície) ---------- */
+vec3 cityWindows(vec3 p, vec3 n){
+  if(abs(n.y) > 0.5 || p.y < 0.4) return vec3(0.0);
+  vec2 id = floor(p.xz / CITY_CELL);
+  vec2 q  = mod(p.xz, CITY_CELL) - CITY_CELL * 0.5;
+  // súradnica pozdĺž fasády podľa orientácie steny
+  float u = (abs(n.x) > abs(n.z)) ? q.y : q.x;
+  vec2 w = vec2(u, p.y) / vec2(0.62, 0.95);     // mriežka okien
+  vec2 wid = floor(w);
+  vec2 wf  = fract(w);
+  // maska okna vo vnútri bunky mriežky
+  float win = smoothstep(0.18, 0.26, wf.x) * smoothstep(0.86, 0.78, wf.x)
+            * smoothstep(0.22, 0.32, wf.y) * smoothstep(0.88, 0.78, wf.y);
+  float hh = hash21(wid + id * 17.31);
+  float lit = step(0.55, hh);                    // ~45 % okien svieti
+  float flick = 0.85 + 0.15 * sin(uTime * 2.0 + hh * 80.0);
+  // teplé okná + občas studené podľa palety scény
+  vec3 warm = palette(hh * 0.6 + 0.1);
+  return warm * win * lit * flick * 3.2;
+}
+
+/* ---------- žiariace žily gyroidu ---------- */
+vec3 gyroidVeins(vec3 p){
+  vec3 q = p * GYR_SCALE * 0.55 + vec3(0.0, uTime * 0.12, 0.0);
+  float v = dot(sin(q), cos(q.zxy));
+  float glow = smoothstep(0.45, 0.0, abs(v + 0.3));
+  float pulse = 0.7 + 0.3 * sin(uTime * 1.5 + p.x * 0.4 + p.z * 0.3);
+  return palette(0.65 + 0.1 * sin(p.y * 0.2)) * glow * pulse * 2.4;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   SHADING – 2-3 svetlá na scénu, mäkké tiene, AO, Fresnel rim,
+   spekulár (Blinn-Phong), emisné materiály.
+   outRefl vracia reflektivitu povrchu pre odrazovú slučku.
+   ════════════════════════════════════════════════════════════════ */
+vec3 shade(vec3 p, vec3 n, vec3 rd, float matId, float t, out float outRefl){
+  outRefl = 0.0;
+  vec3 alb = vec3(0.2);
+  vec3 emis = vec3(0.0);
+  float specPow = 32.0, specInt = 0.6;
+
+  /* --- materiály --- */
+  if(uScene == 0){
+    // orbit-trap farbenie mandelbulbu
+    map(p);  // obnov gTrap (normály ho prepísali)
+    float trapMix = clamp(gTrap.w * 0.7, 0.0, 1.0);
+    alb = palette(trapMix + 0.4 * gTrap.x);
+    alb = mix(alb, vec3(0.05), 0.2);
+    specPow = 48.0; specInt = 0.9;
+  } else if(uScene == 1){
+    alb = palette(0.25 + 0.12 * length(p) + 0.18 * n.y);
+    specPow = 24.0; specInt = 0.5;
+  } else if(uScene == 2){
+    if(matId < 30.5){            // zem – tmavý asfalt s mriežkou ulíc
+      vec2 g = abs(fract(p.xz / CITY_CELL) - 0.5);
+      float road = smoothstep(0.46, 0.49, max(g.x, g.y));
+      alb = mix(vec3(0.020, 0.022, 0.028), vec3(0.05, 0.045, 0.03), road);
+      specInt = 0.25;
+    } else {                     // veža – tmavá fasáda + okná
+      vec2 id = floor(p.xz / CITY_CELL);
+      alb = mix(vec3(0.015, 0.018, 0.028), palette(hash21(id) * 0.5) * 0.06, 0.55);
+      emis = cityWindows(p, n);
+      specPow = 64.0; specInt = 0.8;
+    }
+  } else if(uScene == 3){
+    if(matId < 40.5){            // steny/podlaha – zrkadlové
+      alb = vec3(0.10, 0.11, 0.13);
+      outRefl = uSpecial;
+      specPow = 96.0; specInt = 1.0;
+    } else if(matId < 41.5){     // guľa
+      alb = palette(0.35 + 0.15 * n.y);
+      outRefl = 0.40;
+      specPow = 96.0; specInt = 1.2;
+    } else if(matId < 42.5){     // stĺpy
+      alb = vec3(0.16, 0.15, 0.14);
+      outRefl = 0.12;
+    } else if(matId < 43.5){     // panel A – emisný
+      emis = palette(0.12) * 6.0; alb = vec3(0.02);
+    } else {                     // panel B – emisný
+      emis = palette(0.62) * 6.0; alb = vec3(0.02);
+    }
+  } else {
+    alb = palette(0.2 + 0.1 * sin(p.y * 0.3)) * 0.8;
+    emis = gyroidVeins(p);
+    specPow = 40.0; specInt = 0.7;
+  }
+
+  /* --- svetlá scény: [smer/poz, farba, bod?] --- */
+  vec3 L0dir, L0col, L1dir, L1col, L2dir = vec3(0.0), L2col = vec3(0.0);
+  bool point0 = false;
+  if(uScene == 0){
+    L0dir = normalize(vec3(0.6, 0.7, -0.4)); L0col = vec3(1.05, 0.95, 0.85) * 1.2;
+    L1dir = normalize(vec3(-0.6, -0.2, 0.5)); L1col = vec3(0.20, 0.30, 0.55);
+    L2dir = normalize(vec3(0.0, -1.0, 0.0));  L2col = vec3(0.10, 0.06, 0.12);
+  } else if(uScene == 1){
+    L0dir = normalize(vec3(0.55, 0.45, 0.55)); L0col = vec3(1.2, 0.85, 0.60) * 1.3;
+    L1dir = normalize(vec3(-0.5, 0.1, -0.6));  L1col = vec3(0.15, 0.25, 0.45);
+    L2dir = normalize(vec3(0.0, 1.0, 0.0));    L2col = vec3(0.08, 0.10, 0.14);
+  } else if(uScene == 2){
+    L0dir = normalize(vec3(0.3, 0.55, 0.2));   L0col = vec3(0.35, 0.45, 0.70);  // mesiac
+    L1dir = normalize(vec3(-0.4, 0.2, -0.5));  L1col = vec3(0.10, 0.05, 0.12);
+  } else if(uScene == 3){
+    point0 = true;
+    L0dir = vec3(0.0, 0.4, -6.7);  L0col = palette(0.12) * 9.0;   // panel A
+    L1dir = vec3(-6.7, 0.4, 0.0);  L1col = palette(0.62) * 9.0;   // panel B
+    L2dir = normalize(vec3(0.0, 1.0, 0.0)); L2col = vec3(0.05);
+  } else {
+    point0 = true;
+    L0dir = uCamPos + vec3(0.0, 0.4, 0.0);  L0col = vec3(0.9, 0.95, 1.0) * 2.2; // čelovka
+    L1dir = normalize(vec3(0.3, 0.8, 0.2)); L1col = vec3(0.06, 0.10, 0.10);
+  }
+
+  float ao = calcAO(p, n);
+  vec3 col = vec3(0.0);
+
+  /* hlavné svetlo (smerové alebo bodové) + mäkký tieň */
+  vec3 ld; float att = 1.0; float shadowMax = 24.0;
+  if(point0){
+    vec3 dv = L0dir - p;
+    float dl = length(dv);
+    ld = dv / max(dl, 1e-4);
+    att = 1.0 / (1.0 + 0.045 * dl * dl);
+    shadowMax = dl - 0.25;
+  } else ld = L0dir;
+  float dif0 = max(dot(n, ld), 0.0);
+  float sh = (dif0 > 0.001) ? softShadow(p + n * 0.02, ld, shadowMax) : 0.0;
+  vec3 hv = normalize(ld - rd);
+  float spc0 = pow(max(dot(n, hv), 0.0), specPow) * specInt;
+  col += (alb * dif0 + spc0 * dif0) * L0col * sh * att;
+
+  /* výplňové svetlo (bez tieňa, lacné) */
+  vec3 ld1;
+  float att1 = 1.0;
+  if(uScene == 3){
+    vec3 dv = L1dir - p; float dl = length(dv);
+    ld1 = dv / max(dl, 1e-4); att1 = 1.0 / (1.0 + 0.045 * dl * dl);
+  } else ld1 = L1dir;
+  float dif1 = max(dot(n, ld1), 0.0);
+  col += alb * dif1 * L1col * att1 * ao;
+
+  /* tretie svetlo / ambient bounce */
+  col += alb * max(dot(n, L2dir), 0.0) * L2col * ao;
+
+  /* ambient z oblohy + Fresnel rim */
+  vec3 amb = sky(reflect(rd, n)) * 0.25 + vec3(0.012);
+  col += alb * amb * ao;
+  float fre = pow(clamp(1.0 + dot(n, rd), 0.0, 1.0), 3.5);
+  col += fre * (L0col * 0.04 + vec3(0.04, 0.05, 0.07)) * ao;
+
+  col += emis;
+  return col;
+}
+
+/* ---------- hmla – exponenciálna, prechádza do gradientu oblohy ---------- */
+vec3 applyFog(vec3 col, vec3 rd, float t){
+  float densBase = (uScene == 2) ? 0.010 : (uScene == 3) ? 0.012 : 0.045;
+  float dens = uFog * uFog * densBase;
+  float f = 1.0 - exp(-dens * t);
+  return mix(col, sky(rd), f);
+}
+
+/* ---------- render s odrazovou slučkou (Mirror Room: až 3 odrazy) ---------- */
+vec3 renderRay(vec3 ro, vec3 rd){
+  vec3 col = vec3(0.0);
+  vec3 atten = vec3(1.0);
+  for(int b = 0; b < 3; b++){
+    vec2 hit = march(ro, rd);
+    if(hit.y < 0.0){ col += atten * sky(rd); break; }
+    vec3 p = ro + rd * hit.x;
+    vec3 n = calcNormal(p, hit.x);
+    float refl;
+    vec3 c = shade(p, n, rd, hit.y, hit.x, refl);
+    c = applyFog(c, rd, hit.x);
+    col += atten * c * (1.0 - refl);
+    // odrazy iteruje len Mirror Room (uniformná vetva)
+    if(uScene != 3 || refl < 0.02) break;
+    atten *= refl;
+    ro = p + n * 0.01;
+    rd = normalize(reflect(rd, n));
+  }
+  return col;
+}
+
+/* ---------- ACES-ish tonemapping (Narkowicz) ---------- */
+vec3 aces(vec3 x){
+  return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+}
+
+void main(){
+  vec2 uv = (2.0 * gl_FragCoord.xy - uRes) / uRes.y;
+  float tf = tan(uFov * 0.5);
+  gPix = tf / (uRes.y * 0.5);   // uhlová stopa pixelu pre adaptívny epsilon
+
+  // kamera z yaw/pitch (yaw 0 = pohľad do -Z)
+  float cp = cos(uPitch), sp = sin(uPitch);
+  float cy = cos(uYaw),  sy = sin(uYaw);
+  vec3 fwd   = vec3(cp * sy, sp, -cp * cy);
+  vec3 right = normalize(cross(fwd, vec3(0.0, 1.0, 0.0)));
+  vec3 up    = cross(right, fwd);
+  vec3 rd = normalize(fwd + tf * (uv.x * right + uv.y * up));
+
+  vec3 col = renderRay(uCamPos, rd);
+
+  // jemná vinetácia + tonemapping + gama
+  float vig = 1.0 - 0.25 * dot(uv * 0.55, uv * 0.55);
+  col *= vig;
+  col = aces(col * 1.15);
+  col = pow(col, vec3(1.0 / 2.2));
+  outColor = vec4(col, 1.0);
+}`;
+
+/* jednoduchý blit shader – upscaluje offscreen render na canvas */
+const BLIT_FRAG = `#version 300 es
+precision mediump float;
+in vec2 vUV;
+out vec4 outColor;
+uniform sampler2D uTex;
+void main(){ outColor = texture(uTex, vUV); }`;
+
+/* ════════════════════════════════════════════════════════════════════
+   2. WEBGL BOILERPLATE
+   ════════════════════════════════════════════════════════════════════ */
+const canvas = document.getElementById("glcanvas");
+const gl = canvas.getContext("webgl2", { antialias: false, alpha: false, preserveDrawingBuffer: false });
+if(!gl){
+  document.getElementById("nogl").style.display = "grid";
+  throw new Error("WebGL2 unavailable");
+}
+
+function compile(type, src){
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if(!gl.getShaderParameter(s, gl.COMPILE_STATUS)){
+    console.error(gl.getShaderInfoLog(s));
+    throw new Error("Shader compile failed");
+  }
+  return s;
+}
+function link(vs, fs){
+  const p = gl.createProgram();
+  gl.attachShader(p, compile(gl.VERTEX_SHADER, vs));
+  gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(p);
+  if(!gl.getProgramParameter(p, gl.LINK_STATUS)){
+    console.error(gl.getProgramInfoLog(p));
+    throw new Error("Program link failed");
+  }
+  return p;
+}
+
+const mainProg = link(VERT_SRC, FRAG_SRC);
+const blitProg = link(VERT_SRC, BLIT_FRAG);
+const U = {};   // cache uniform lokácií hlavného programu
+for(const name of ["uRes","uTime","uScene","uPalette","uFog","uShadow","uAO",
+                   "uFov","uSpecial","uAnimPower","uCamPos","uYaw","uPitch"]){
+  U[name] = gl.getUniformLocation(mainProg, name);
+}
+const uBlitTex = gl.getUniformLocation(blitProg, "uTex");
+const vao = gl.createVertexArray();   // prázdny VAO pre gl_VertexID trik
+
+/* offscreen framebuffer pre render scale */
+const fbo = gl.createFramebuffer();
+const fboTex = gl.createTexture();
+let fbW = 0, fbH = 0;
+function resizeFBO(w, h){
+  if(w === fbW && h === fbH) return;
+  fbW = w; fbH = h;
+  gl.bindTexture(gl.TEXTURE_2D, fboTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, fboTex, 0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+}
+
+const DPR = Math.min(window.devicePixelRatio || 1, 1.5);  // strop DPR = 1.5
+function resizeCanvas(){
+  const w = Math.round(canvas.clientWidth  * DPR);
+  const h = Math.round(canvas.clientHeight * DPR);
+  if(canvas.width !== w || canvas.height !== h){ canvas.width = w; canvas.height = h; }
+}
+window.addEventListener("resize", resizeCanvas);
+
+/* ════════════════════════════════════════════════════════════════════
+   3. KAMERA + VSTUP (fly kamera, pointer lock, dotyk)
+   ════════════════════════════════════════════════════════════════════ */
+const cam = {
+  pos: [0, 0.4, 3.2],
+  vel: [0, 0, 0],
+  yaw: 0, pitch: 0,
+  speed: 1.6,
+};
+const keys = {};
+
+function lookAt(pos, target){
+  cam.pos = pos.slice();
+  cam.vel = [0, 0, 0];
+  const d = [target[0]-pos[0], target[1]-pos[1], target[2]-pos[2]];
+  const len = Math.hypot(d[0], d[1], d[2]) || 1;
+  cam.pitch = Math.asin(d[1] / len);
+  cam.yaw = Math.atan2(d[0], -d[2]);
+}
+
+canvas.addEventListener("click", () => {
+  if(document.pointerLockElement !== canvas) canvas.requestPointerLock();
+});
+window.addEventListener("mousemove", e => {
+  if(document.pointerLockElement !== canvas) return;
+  cam.yaw   += e.movementX * 0.0023;
+  cam.pitch -= e.movementY * 0.0023;
+  cam.pitch = Math.max(-1.55, Math.min(1.55, cam.pitch));
+});
+window.addEventListener("keydown", e => {
+  if(e.code === "KeyH"){ toggleUI(); return; }
+  keys[e.code] = true;
+  if(["Space","ShiftLeft","ShiftRight"].includes(e.code)) e.preventDefault();
+});
+window.addEventListener("keyup", e => { keys[e.code] = false; });
+window.addEventListener("blur", () => { for(const k in keys) keys[k] = false; });
+canvas.addEventListener("wheel", e => {
+  e.preventDefault();
+  cam.speed *= Math.exp(-e.deltaY * 0.0012);
+  cam.speed = Math.max(0.1, Math.min(150, cam.speed));
+}, { passive: false });
+
+/* dotyk: 1 prst = rozhliadanie, 2 prsty = pohyb (vpred/strafe) */
+let touchPrev = null;
+canvas.addEventListener("touchstart", e => {
+  e.preventDefault();
+  touchPrev = avgTouch(e.touches);
+}, { passive: false });
+canvas.addEventListener("touchmove", e => {
+  e.preventDefault();
+  const cur = avgTouch(e.touches);
+  if(touchPrev && touchPrev.n === cur.n){
+    const dx = cur.x - touchPrev.x, dy = cur.y - touchPrev.y;
+    if(cur.n === 1){
+      cam.yaw   += dx * 0.005;
+      cam.pitch -= dy * 0.005;
+      cam.pitch = Math.max(-1.55, Math.min(1.55, cam.pitch));
+    } else {
+      const f = camForward(), r = camRight();
+      const mv = cam.speed * 0.02;
+      for(let i = 0; i < 3; i++)
+        cam.pos[i] += (-dy * f[i] + dx * r[i]) * mv;
+    }
+  }
+  touchPrev = cur;
+}, { passive: false });
+canvas.addEventListener("touchend", e => {
+  touchPrev = e.touches.length ? avgTouch(e.touches) : null;
+});
+function avgTouch(ts){
+  let x = 0, y = 0;
+  for(const t of ts){ x += t.clientX; y += t.clientY; }
+  return { x: x / ts.length, y: y / ts.length, n: ts.length };
+}
+
+function camForward(){
+  const cp = Math.cos(cam.pitch);
+  return [cp * Math.sin(cam.yaw), Math.sin(cam.pitch), -cp * Math.cos(cam.yaw)];
+}
+function camRight(){
+  return [Math.cos(cam.yaw), 0, Math.sin(cam.yaw)];
+}
+
+function updateCamera(dt){
+  const f = camForward(), r = camRight();
+  let tx = 0, ty = 0, tz = 0;
+  if(keys.KeyW){ tx += f[0]; ty += f[1]; tz += f[2]; }
+  if(keys.KeyS){ tx -= f[0]; ty -= f[1]; tz -= f[2]; }
+  if(keys.KeyD){ tx += r[0]; tz += r[2]; }
+  if(keys.KeyA){ tx -= r[0]; tz -= r[2]; }
+  if(keys.KeyE || keys.Space) ty += 1;
+  if(keys.KeyQ || keys.ShiftLeft || keys.ShiftRight) ty -= 1;
+  const len = Math.hypot(tx, ty, tz);
+  if(len > 0){ tx /= len; ty /= len; tz /= len; }
+  const target = [tx * cam.speed, ty * cam.speed, tz * cam.speed];
+  // hladké tlmenie rýchlosti (exponenciálny lerp)
+  const a = 1 - Math.exp(-dt * 9);
+  for(let i = 0; i < 3; i++){
+    cam.vel[i] += (target[i] - cam.vel[i]) * a;
+    cam.pos[i] += cam.vel[i] * dt;
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   4. UI BINDING + STAV
+   ════════════════════════════════════════════════════════════════════ */
+const state = {
+  scene: 0,
+  palette: 0,
+  resScale: 0.75,
+  adaptive: true,
+  adaptMul: 1.0,    // násobič adaptívnej kvality
+  fog: 0.45,
+  shadow: 0.5,
+  ao: 0.7,
+  animSpeed: 1.0,
+  fovDeg: 70,
+  animPower: false,
+  special: [8.0, 4, 0.65, 0.6, 0.08],   // hodnota špec. parametra per scéna
+  animTime: 0,
+};
+
+/* konfigurácia špeciálneho slidera + štartovacej kamery per scéna */
+const SCENES = [
+  { name: "Power",        min: 2,    max: 12,   step: 0.1,  def: 8,
+    spawn: [[0, 0.6, 3.1], [0, 0, 0]],   speed: 1.6 },
+  { name: "Iterations",   min: 1,    max: 6,    step: 1,    def: 4,
+    spawn: [[2.6, 2.0, 3.4], [0, 0, 0]], speed: 2.2 },
+  { name: "City density", min: 0.15, max: 1,    step: 0.01, def: 0.65,
+    spawn: [[3.5, 15, 3.5], [3.5, 9, -40]], speed: 16 },
+  { name: "Reflectivity", min: 0,    max: 0.95, step: 0.01, def: 0.6,
+    spawn: [[0, -1.0, 5.2], [0, -1.2, 0]], speed: 3 },
+  { name: "Thickness",    min: 0.02, max: 0.25, step: 0.005, def: 0.08,
+    spawn: [[2.0, 0.2, 0.5], [5, 0.5, 3]], speed: 2.2 },
+];
+
+const $ = id => document.getElementById(id);
+const panel = $("panel"), hud = $("hud");
+
+$("panelHead").addEventListener("click", () => panel.classList.toggle("collapsed"));
+
+$("sceneSel").addEventListener("change", e => setScene(parseInt(e.target.value, 10)));
+
+function setScene(i){
+  state.scene = i;
+  const sc = SCENES[i];
+  lookAt(sc.spawn[0], sc.spawn[1]);
+  cam.speed = sc.speed;
+  // prekonfiguruj špeciálny slider
+  const sl = $("special");
+  sl.min = sc.min; sl.max = sc.max; sl.step = sc.step;
+  sl.value = state.special[i];
+  $("specialName").textContent = sc.name;
+  $("specialVal").textContent = fmtSpecial(i, state.special[i]);
+  $("animPowerRow").style.display = (i === 0) ? "" : "none";
+  refreshPaletteSwatches();
+}
+function fmtSpecial(i, v){
+  return SCENES[i].step >= 1 ? String(Math.round(v)) : Number(v).toFixed(2);
+}
+$("special").addEventListener("input", e => {
+  state.special[state.scene] = parseFloat(e.target.value);
+  $("specialVal").textContent = fmtSpecial(state.scene, e.target.value);
+});
+$("animPower").addEventListener("change", e => { state.animPower = e.target.checked; });
+
+/* paletové tlačidlá – swatch gradienty z rovnakej kosínusovej palety */
+const PAL_JS = {
+  // skopírované koeficienty z shadera (a, b, c, d) pre náhľady
+  A: [[.5,.5,.5],[.55,.42,.3],[.4,.5,.62],[.52,.45,.38],[.5,.5,.5],[.38,.5,.44],[.55,.45,.6],[.6,.45,.3],[.45,.55,.65],[.6,.42,.5],[.42,.55,.6],[.55,.5,.4],[.45,.55,.55],[.5,.42,.58],[.55,.42,.42]],
+  B: [[.5,.5,.5],[.5,.42,.3],[.32,.4,.5],[.42,.38,.3],[.5,.5,.5],[.35,.45,.38],[.45,.4,.5],[.45,.4,.25],[.4,.45,.5],[.45,.38,.42],[.38,.45,.48],[.42,.42,.35],[.4,.45,.45],[.42,.38,.48],[.45,.38,.38]],
+  C: [[1,1,1],[1,1,1],[1,1,1],[1,1,1],[1,1,1],[1,1,1],[2,1,1],[1,1,1],[1,1,.5],[1,1,1],[1,1,1],[1,1,1],[1,1,1],[1,1,1],[1,1,1]],
+  D: [[0,.33,.67],[0,.1,.2],[.55,.65,.75],[0,.12,.25],[.3,.2,.2],[.1,.35,.2],[.5,.2,.25],[0,.15,.3],[.6,.45,.2],[.85,.4,.3],[.5,.3,.2],[0,.25,.5],[.3,.55,.45],[.7,.4,.2],[0,.4,.55]],
+};
+function palColor(idx, t){
+  const c = [0, 0, 0];
+  for(let k = 0; k < 3; k++){
+    c[k] = PAL_JS.A[idx][k] + PAL_JS.B[idx][k] * Math.cos(6.28318 * (PAL_JS.C[idx][k] * t + PAL_JS.D[idx][k]));
+    c[k] = Math.round(Math.max(0, Math.min(1, c[k])) * 255);
+  }
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+const palBtns = [...document.querySelectorAll(".palettes button")];
+function refreshPaletteSwatches(){
+  palBtns.forEach((b, j) => {
+    const idx = state.scene * 3 + j;
+    const stops = [0, .25, .5, .75, 1].map(t => palColor(idx, t)).join(",");
+    b.style.background = `linear-gradient(90deg, ${stops})`;
+    b.classList.toggle("active", j === state.palette);
+  });
+}
+palBtns.forEach(b => b.addEventListener("click", () => {
+  state.palette = parseInt(b.dataset.p, 10);
+  refreshPaletteSwatches();
+}));
+
+/* generické slidery */
+function bindRange(id, valId, key, fmt = v => Number(v).toFixed(2)){
+  $(id).addEventListener("input", e => {
+    state[key] = parseFloat(e.target.value);
+    $(valId).textContent = fmt(e.target.value);
+  });
+  $(valId).textContent = fmt($(id).value);
+}
+bindRange("resScale", "resVal", "resScale", v => Number(v).toFixed(2) + "x");
+bindRange("fog", "fogVal", "fog");
+bindRange("shadow", "shadowVal", "shadow");
+bindRange("ao", "aoVal", "ao");
+bindRange("anim", "animVal", "animSpeed", v => Number(v).toFixed(2) + "x");
+bindRange("fov", "fovVal", "fovDeg", v => v + "°");
+$("adaptive").addEventListener("change", e => {
+  state.adaptive = e.target.checked;
+  if(!state.adaptive) state.adaptMul = 1.0;
+});
+
+/* H – skry/ukáž celé UI */
+let uiVisible = true;
+function toggleUI(){
+  uiVisible = !uiVisible;
+  for(const el of [panel, hud, $("crosshair"), $("hint")])
+    el.classList.toggle("uiHidden", !uiVisible);
+}
+
+/* nápoveda zmizne po 5 sekundách */
+setTimeout(() => $("hint").classList.add("fade"), 5000);
+
+/* screenshot – jeden frame v plnom rozlíšení, toBlob → PNG download */
+$("shotBtn").addEventListener("click", () => {
+  renderFrame(lastNow, 1.0);                 // force scale 1.0
+  // blit beží synchronne v tom istom tasku → drawing buffer je platný
+  canvas.toBlob(blob => {
+    if(!blob) return;
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `raymarch_${["mandelbulb","menger","city","mirror","gyroid"][state.scene]}_${Date.now()}.png`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  }, "image/png");
+});
+
+/* ════════════════════════════════════════════════════════════════════
+   5. RENDER SLUČKA + ADAPTÍVNA KVALITA + FPS
+   ════════════════════════════════════════════════════════════════════ */
+let lastNow = performance.now();
+let fpsEMA = 60;
+let adaptTimer = 0;
+let frameCount = 0;
+
+function renderFrame(now, scaleOverride){
+  resizeCanvas();
+  const scale = scaleOverride !== undefined
+    ? scaleOverride
+    : Math.max(0.2, Math.min(1, state.resScale * state.adaptMul));
+  const rw = Math.max(2, Math.round(canvas.width * scale));
+  const rh = Math.max(2, Math.round(canvas.height * scale));
+  resizeFBO(rw, rh);
+
+  /* 1) scéna do offscreen FBO v zmenšenom rozlíšení */
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.viewport(0, 0, rw, rh);
+  gl.useProgram(mainProg);
+  gl.bindVertexArray(vao);
+  gl.uniform2f(U.uRes, rw, rh);
+  gl.uniform1f(U.uTime, state.animTime);
+  gl.uniform1i(U.uScene, state.scene);
+  gl.uniform1i(U.uPalette, state.palette);
+  gl.uniform1f(U.uFog, state.fog);
+  gl.uniform1f(U.uShadow, state.shadow);
+  gl.uniform1f(U.uAO, state.ao);
+  gl.uniform1f(U.uFov, state.fovDeg * Math.PI / 180);
+  gl.uniform1f(U.uSpecial, state.special[state.scene]);
+  gl.uniform1i(U.uAnimPower, (state.scene === 0 && state.animPower) ? 1 : 0);
+  gl.uniform3f(U.uCamPos, cam.pos[0], cam.pos[1], cam.pos[2]);
+  gl.uniform1f(U.uYaw, cam.yaw);
+  gl.uniform1f(U.uPitch, cam.pitch);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+  /* 2) upscale blit na canvas */
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.useProgram(blitProg);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, fboTex);
+  gl.uniform1i(uBlitTex, 0);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+
+function loop(now){
+  const dt = Math.min(0.1, (now - lastNow) / 1000);
+  lastNow = now;
+
+  /* fps EMA + adaptívna kvalita */
+  if(dt > 0){
+    const fps = 1 / dt;
+    fpsEMA += (fps - fpsEMA) * 0.08;
+  }
+  adaptTimer += dt;
+  if(state.adaptive && adaptTimer > 0.6){
+    adaptTimer = 0;
+    if(fpsEMA < 45 && state.adaptMul > 0.4)
+      state.adaptMul = Math.max(0.4, state.adaptMul - 0.1);
+    else if(fpsEMA > 58 && state.adaptMul < 1.0)
+      state.adaptMul = Math.min(1.0, state.adaptMul + 0.05);
+  }
+
+  state.animTime += dt * state.animSpeed;
+  updateCamera(dt);
+  renderFrame(now);
+
+  /* HUD – pozícia + fps (každý 6. frame stačí) */
+  if((frameCount++ % 6) === 0 && uiVisible){
+    const eff = (state.resScale * state.adaptMul).toFixed(2);
+    hud.textContent =
+      `pos  ${cam.pos[0].toFixed(1).padStart(7)} ${cam.pos[1].toFixed(1).padStart(7)} ${cam.pos[2].toFixed(1).padStart(7)}\n` +
+      `fps  ${fpsEMA.toFixed(0).padStart(7)}\n` +
+      `res  ${String(fbW).padStart(5)}x${fbH}  (${eff}x)`;
+  }
+  requestAnimationFrame(loop);
+}
+
+/* štart */
+resizeCanvas();
+setScene(0);
+$("sceneSel").value = "0";
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
